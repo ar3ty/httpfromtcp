@@ -20,8 +20,8 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Printf("Cannot get connection: %s\n", err)
-			continue
+			log.Fatalf("Cannot get connection: %s", err)
+
 		}
 		fmt.Printf("Connection accepted from: %s\n", conn.RemoteAddr())
 
@@ -39,6 +39,6 @@ func main() {
 			fmt.Printf("- %s: %s\n", key, value)
 		}
 		fmt.Println("Body:")
-		fmt.Printf("%s\n", string(req.Body))
+		fmt.Println(string(req.Body))
 	}
 }

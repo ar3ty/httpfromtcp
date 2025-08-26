@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/ar3ty/httpfromtcp/internal/headers"
 )
 
 type parseStatus int
 
 const (
 	parseStatusInitialized parseStatus = iota
+	parseStatusParsingHeaders
 	parseStatusDone
 )
 const bufferSize = 8
@@ -24,6 +27,7 @@ type RequestLine struct {
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     headers.Headers
 	Status      parseStatus
 }
 
@@ -78,10 +82,10 @@ func parseRequestLine(data []byte) (*RequestLine, int, error) {
 	if err != nil {
 		return nil, idx, err
 	}
-	return requestLine, idx, nil
+	return requestLine, idx + 2, nil
 }
 
-func (r *Request) parse(data []byte) (int, error) {
+func (r *Request) parseSingle(data []byte) (int, error) {
 	switch r.Status {
 	case parseStatusInitialized:
 		rLine, n, err := parseRequestLine(data)
@@ -92,7 +96,16 @@ func (r *Request) parse(data []byte) (int, error) {
 			return 0, nil
 		}
 		r.RequestLine = *rLine
-		r.Status = parseStatusDone
+		r.Status = parseStatusParsingHeaders
+		return n, nil
+	case parseStatusParsingHeaders:
+		n, done, err := r.Headers.Parse(data)
+		if err != nil {
+			return 0, err
+		}
+		if done {
+			r.Status = parseStatusDone
+		}
 		return n, nil
 	case parseStatusDone:
 		return 0, errors.New("trying to read data in a done state")
@@ -101,11 +114,27 @@ func (r *Request) parse(data []byte) (int, error) {
 	}
 }
 
+func (r *Request) parse(data []byte) (int, error) {
+	totalParsed := 0
+	for r.Status != parseStatusDone {
+		n, err := r.parseSingle(data[totalParsed:])
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return totalParsed, nil
+		}
+		totalParsed += n
+	}
+	return totalParsed, nil
+}
+
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, bufferSize)
 	readToIndex := 0
 	req := &Request{
-		Status: parseStatusInitialized,
+		Headers: headers.Headers{},
+		Status:  parseStatusInitialized,
 	}
 
 	for req.Status != parseStatusDone {
@@ -117,7 +146,9 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 		n, err := reader.Read(buf[readToIndex:])
 		if err != nil {
 			if err == io.EOF {
-				req.Status = parseStatusDone
+				if req.Status != parseStatusDone {
+					return nil, fmt.Errorf("incomplete request")
+				}
 				break
 			}
 			return nil, err

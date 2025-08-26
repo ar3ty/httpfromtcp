@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/ar3ty/httpfromtcp/internal/headers"
@@ -15,6 +16,7 @@ type parseStatus int
 const (
 	parseStatusInitialized parseStatus = iota
 	parseStatusParsingHeaders
+	parseStatusParsingBody
 	parseStatusDone
 )
 const bufferSize = 8
@@ -28,6 +30,7 @@ type RequestLine struct {
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 	Status      parseStatus
 }
 
@@ -104,9 +107,29 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, err
 		}
 		if done {
-			r.Status = parseStatusDone
+			r.Status = parseStatusParsingBody
 		}
 		return n, nil
+	case parseStatusParsingBody:
+		val, ok := r.Headers.Get("content-length")
+		if !ok {
+			r.Status = parseStatusDone
+			return 0, nil
+		}
+		contentLength, err := strconv.Atoi(val)
+		if err != nil {
+			return 0, fmt.Errorf("invalid content length value: err")
+		}
+
+		r.Body = append(r.Body, data...)
+		if len(r.Body) > contentLength {
+			return 0, errors.New("body is longer than declared")
+		}
+		if len(r.Body) == contentLength {
+			r.Status = parseStatusDone
+		}
+		return len(data), nil
+
 	case parseStatusDone:
 		return 0, errors.New("trying to read data in a done state")
 	default:
@@ -121,10 +144,10 @@ func (r *Request) parse(data []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if n == 0 {
-			return totalParsed, nil
-		}
 		totalParsed += n
+		if n == 0 {
+			break
+		}
 	}
 	return totalParsed, nil
 }
@@ -133,8 +156,9 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, bufferSize)
 	readToIndex := 0
 	req := &Request{
-		Headers: headers.Headers{},
+		Headers: headers.NewHeaders(),
 		Status:  parseStatusInitialized,
+		Body:    []byte{},
 	}
 
 	for req.Status != parseStatusDone {

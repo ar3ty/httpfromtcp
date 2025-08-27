@@ -16,20 +16,20 @@ const (
 )
 
 func WriteStatusLine(w io.Writer, statusCode StatusCode) error {
-	var status string
+	var reasonPhrase string
 	switch statusCode {
 	case OK:
-		status = "HTTP/1.1 200 OK"
+		reasonPhrase = "OK"
 	case BadRequest:
-		status = "HTTP/1.1 400 Bad Request"
+		reasonPhrase = "Bad Request"
 	case InternalServerError:
-		status = "HTTP/1.1 500 Internal Server Error"
+		reasonPhrase = "Internal Server Error"
 	default:
-		status = fmt.Sprintf("HTTP/1.1 %d ", statusCode)
+		reasonPhrase = ""
 	}
-	status += "\r\n"
+	status := []byte(fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reasonPhrase))
 
-	_, err := w.Write([]byte(status))
+	_, err := w.Write(status)
 	if err != nil {
 		return fmt.Errorf("failed writing status-line: %w", err)
 	}

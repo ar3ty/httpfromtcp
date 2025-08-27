@@ -6,6 +6,8 @@ import (
 	"net"
 	"strconv"
 	"sync/atomic"
+
+	"github.com/ar3ty/httpfromtcp/internal/response"
 )
 
 type Server struct {
@@ -54,7 +56,13 @@ func (s *Server) listen() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-	_, err := conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello World!"))
+
+	headers := response.GetDefaultHeaders(0)
+	err := response.WriteStatusLine(conn, response.OK)
+	if err != nil {
+		log.Fatalf("Error writing in connection: %v", err)
+	}
+	err = response.WriteHeaders(conn, headers)
 	if err != nil {
 		log.Fatalf("Error writing in connection: %v", err)
 	}

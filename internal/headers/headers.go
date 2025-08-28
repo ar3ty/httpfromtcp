@@ -30,6 +30,11 @@ func checkFieldName(name []byte) bool {
 	return true
 }
 
+func (h Headers) Replace(key, value string) {
+	key = strings.ToLower(key)
+	h[key] = value
+}
+
 func (h Headers) Set(key, value string) {
 	key = strings.ToLower(key)
 	if val, ok := h[key]; ok {
@@ -42,6 +47,14 @@ func (h Headers) Get(key string) (string, bool) {
 	key = strings.ToLower(key)
 	val, ok := h[key]
 	return val, ok
+}
+
+func (h Headers) Delete(key string) {
+	key = strings.ToLower(key)
+	_, ok := h[key]
+	if ok {
+		delete(h, key)
+	}
 }
 
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {

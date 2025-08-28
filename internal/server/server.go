@@ -1,9 +1,7 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strconv"
@@ -13,30 +11,27 @@ import (
 	"github.com/ar3ty/httpfromtcp/internal/response"
 )
 
-type HandlerError struct {
-	StatusCode response.StatusCode
-	Message    []byte
-}
-
-func (e *HandlerError) report(w io.Writer) {
-	headers := response.GetDefaultHeaders(len(e.Message))
-
-	err := response.WriteStatusLine(w, e.StatusCode)
+func report(w *response.Writer, code response.StatusCode, messagestr string) {
+	err := w.WriteStatusLine(code)
 	if err != nil {
 		log.Fatalf("Error writing in connection: %v", err)
 	}
-	err = response.WriteHeaders(w, headers)
+	message := []byte(messagestr)
+
+	err = w.WriteHeaders(response.GetDefaultHeaders(len(message)))
 	if err != nil {
 		log.Fatalf("Error writing in connection: %v", err)
 	}
 
-	_, err = w.Write(e.Message)
-	if err != nil {
-		log.Fatalf("Error writing in connection: %v", err)
+	if len(message) > 0 {
+		_, err = w.WriteBody(message)
+		if err != nil {
+			log.Fatalf("Error writing in connection: %v", err)
+		}
 	}
 }
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
 
 type Server struct {
 	listener net.Listener
@@ -87,36 +82,13 @@ func (s *Server) listen() {
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
 
+	resWriter := response.NewWriter(conn)
+
 	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		errToReport := &HandlerError{
-			StatusCode: response.BadRequest,
-			Message:    []byte(err.Error()),
-		}
-		errToReport.report(conn)
-		return
-	}
-	buf := bytes.NewBuffer([]byte{})
-
-	handlerErr := s.handler(buf, req)
-	if handlerErr != nil {
-		handlerErr.report(conn)
+		report(resWriter, 500, "couldn't get request")
 		return
 	}
 
-	headers := response.GetDefaultHeaders(buf.Len())
-
-	err = response.WriteStatusLine(conn, response.OK)
-	if err != nil {
-		log.Fatalf("Error writing in connection: %v", err)
-	}
-	err = response.WriteHeaders(conn, headers)
-	if err != nil {
-		log.Fatalf("Error writing in connection: %v", err)
-	}
-
-	_, err = conn.Write(buf.Bytes())
-	if err != nil {
-		log.Fatalf("Error writing in connection: %v", err)
-	}
+	s.handler(resWriter, req)
 }

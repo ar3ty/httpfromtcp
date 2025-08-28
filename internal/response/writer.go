@@ -13,6 +13,7 @@ const (
 	writingStatusLine WriterState = iota
 	writingHeaders
 	writingBody
+	writingTrailers
 )
 
 type Writer struct {
@@ -75,31 +76,60 @@ func (w *Writer) WriteBody(p []byte) (int, error) {
 }
 
 func (w *Writer) WriteChunkedBody(p []byte) (int, error) {
-	num := []byte(fmt.Sprintf("%X\r\n", len(p)))
-	_, err := w.writer.Write(num)
-	if err != nil {
-		return 0, err
+	if w.state != writingBody {
+		return 0, fmt.Errorf("writing body is not allowed in current state")
 	}
 
-	n, err := w.writer.Write(p)
+	total := 0
+	num := []byte(fmt.Sprintf("%x\r\n", len(p)))
+	n, err := w.writer.Write(num)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
+	total += n
 
-	_, err = w.writer.Write([]byte("\r\n"))
+	n, err = w.writer.Write(p)
 	if err != nil {
-		return 0, err
+		return total, err
 	}
+	total += n
 
-	return n, nil
+	n, err = w.writer.Write([]byte("\r\n"))
+	if err != nil {
+		return total, err
+	}
+	total += n
+
+	return total, nil
 }
 
 func (w *Writer) WriteChunkedBodyDone() (int, error) {
-	num := []byte(fmt.Sprintf("%X\r\n\r\n", 0))
-	_, err := w.writer.Write(num)
+	if w.state != writingBody {
+		return 0, fmt.Errorf("writing body is not allowed in current state")
+	}
+	defer func() { w.state = writingTrailers }()
+
+	num := []byte("0\r\n")
+	n, err := w.writer.Write(num)
 	if err != nil {
-		return 0, err
+		return n, err
+	}
+	return 0, nil
+}
+
+func (w *Writer) WriteTrailers(h headers.Headers) error {
+	if w.state != writingTrailers {
+		return fmt.Errorf("writing trailers is not allowed in current state")
+	}
+	defer func() { w.state = writingBody }()
+
+	for key, value := range h {
+		_, err := w.writer.Write([]byte(fmt.Sprintf("%s: %s\r\n", key, value)))
+		if err != nil {
+			return err
+		}
 	}
 
-	return 0, nil
+	_, err := w.writer.Write([]byte("\r\n"))
+	return err
 }

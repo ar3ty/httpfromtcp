@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ar3ty/httpfromtcp/internal/headers"
 	"github.com/ar3ty/httpfromtcp/internal/request"
 	"github.com/ar3ty/httpfromtcp/internal/response"
 	"github.com/ar3ty/httpfromtcp/internal/server"
@@ -45,31 +49,80 @@ func handler200(w *response.Writer, _ *request.Request) {
 	w.WriteBody(message)
 }
 
-func handlerHTTPBin(w *response.Writer, req *request.Request, query string) {
-	w.WriteStatusLine(response.OK)
-
-	h := response.GetDefaultHeaders(0)
-	h.Delete("Content-Length")
-	h.Set("Transfer-Encoding", "chunked")
-	w.WriteHeaders(h)
-
-	resp, err := http.Get("https://httpbin.org" + query)
+func handlerVideo(w *response.Writer, req *request.Request) {
+	message, err := os.ReadFile("assets/vim.mp4")
 	if err != nil {
 		handler500(w, req)
 		return
 	}
 
+	w.WriteStatusLine(response.OK)
+	h := response.GetDefaultHeaders(len(message))
+	h.Replace("Content-Type", "video/mp4")
+	w.WriteHeaders(h)
+	w.WriteBody(message)
+}
+
+func handlerProxy(w *response.Writer, req *request.Request) {
+	target := strings.TrimPrefix(req.RequestLine.RequestTarget, "/httpbin")
+	url := "https://httpbin.org" + target
+	fmt.Println("Proxying to", url)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		handler500(w, req)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.WriteStatusLine(response.OK)
+
+	h := response.GetDefaultHeaders(0)
+	h.Delete("Content-Length")
+	h.Replace("Transfer-Encoding", "chunked")
+	h.Set("Trailer", "X-Content-SHA256")
+	h.Set("Trailer", "X-Content-Length")
+	w.WriteHeaders(h)
+
 	buf := make([]byte, 1024)
+	fullBody := []byte{}
 
 	for {
 		n, err := resp.Body.Read(buf)
+		fmt.Println("Read", n, "bytes")
+		if n > 0 {
+			_, err := w.WriteChunkedBody(buf[:n])
+			if err != nil {
+				fmt.Println("Error writing chunk body:", err)
+			}
+			fullBody = append(fullBody, buf[:n]...)
+
+		}
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
+			fmt.Println("Error reading response body:", err)
 			break
 		}
 
-		w.WriteChunkedBody(buf[:n])
 	}
-	w.WriteChunkedBodyDone()
+	hash := sha256.Sum256(fullBody)
+
+	_, err = w.WriteChunkedBodyDone()
+	if err != nil {
+		fmt.Println("Error writing chunk body done:", err)
+	}
+
+	trailers := headers.NewHeaders()
+	trailers.Set("X-Content-SHA256", fmt.Sprintf("%x", hash))
+	trailers.Set("X-Content-Length", fmt.Sprintf("%d", len(fullBody)))
+
+	err = w.WriteTrailers(trailers)
+	if err != nil {
+		fmt.Println("Error writing trailers:", err)
+	}
+	fmt.Println("Wrote trailers")
 }
 
 func handler(w *response.Writer, req *request.Request) {
@@ -83,7 +136,11 @@ func handler(w *response.Writer, req *request.Request) {
 		return
 	}
 	if strings.HasPrefix(target, "/httpbin") {
-		handlerHTTPBin(w, req, strings.TrimPrefix(target, "/httpbin"))
+		handlerProxy(w, req)
+		return
+	}
+	if target == "/video" {
+		handlerVideo(w, req)
 		return
 	}
 
